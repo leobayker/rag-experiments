@@ -1,0 +1,35 @@
+# Environment
+.env
+*.env
+
+# API keys / credentials
+credentials.py
+secrets.py
+
+# Test documents (may contain sensitive data)
+*.pdf
+*.docx
+*.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Qdrant local storage (P2+)
+qdrant_storage/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OS
+.DS_Store
+Thumbs.db
