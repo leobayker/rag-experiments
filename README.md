@@ -8,14 +8,14 @@ Each script is a standalone, runnable experiment. No frameworks in early stages 
 
 ## Roadmap
 
-| File | Stage | Stack | Status |
-|---|---|---|---|
-| `rag_manual.py` | P1 — Manual RAG | pypdf · OpenAI Embeddings · NumPy · GPT-4o-mini | ✅ Done |
-| `rag_llamaindex_qdrant.py` | P2 — Framework RAG | LlamaIndex · Qdrant · OpenAI | ⬜ Next |
-| `rag_multidoc.py` | P3 — Multi-doc + metadata | LlamaIndex · Qdrant | ⬜ |
-| `streamlit_app.py` | P4 — UI | Streamlit · LlamaIndex · Qdrant | ⬜ |
-| `agent_react.py` | P5–P6 — ReAct Agent | LlamaIndex Agents · Tools | ⬜ |
-| `agent_memory.py` | P7 — Agent with memory | LlamaIndex · Redis/Qdrant | ⬜ |
+| File | Stage | Stack |
+|---|---|---|
+| `rag_manual.py` | P1 — Manual RAG | pypdf · OpenAI Embeddings · NumPy · GPT-4o-mini |
+| `rag_llamaindex_qdrant.py` | P2 — Framework RAG | LlamaIndex · Qdrant · OpenAI |
+| `rag_multidoc.py` | P3 — Multi-doc + metadata | LlamaIndex · Qdrant |
+| `streamlit_app.py` | P4 — UI | Streamlit · LlamaIndex · Qdrant |
+| `agent_react.py` | P5–P6 — ReAct Agent | LlamaIndex Agents · Tools |
+| `agent_memory.py` | P7 — Agent with memory | LlamaIndex · Qdrant |
 
 ---
 
