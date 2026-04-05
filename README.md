@@ -1,141 +1,159 @@
 # rag-experiments
 
-Personal learning repository — building RAG pipelines and AI Agents from scratch.
-Stack: LlamaIndex · Qdrant · OpenAI API · FastAPI · Streamlit
+Hands-on RAG (Retrieval-Augmented Generation) implementation series.
+Built on a self-hosted VPS using LlamaIndex, Qdrant, and OpenAI API.
+
+Each script represents one learning stage — from raw API calls to production-ready agents.
 
 ---
 
-## Structure
+## Stack
 
-| File | Stage | Description |
-|------|-------|-------------|
-| `rag_manual.py` | P1 | RAG without frameworks — raw OpenAI API, cosine similarity in pure Python |
-| `rag_llamaindex_qdrant.py` | P2 | RAG with LlamaIndex + Qdrant vector store |
-| `rag_multidoc.py` | P3 | Multi-document RAG with metadata filtering *(coming soon)* |
-| `streamlit_app.py` | P4 | Web UI for RAG pipeline *(coming soon)* |
-| `agent_react.py` | P5-P6 | ReAct agent with tools *(coming soon)* |
-| `agent_memory.py` | P7 | Agent with persistent memory *(coming soon)* |
-
----
-
-## P1 — RAG Without Frameworks (`rag_manual.py`)
-
-Manual implementation to understand what happens under the hood:
-
-- Load PDF → extract text with `pypdf`
-- Split into chunks manually
-- Call OpenAI Embeddings API directly → get 1536-dimension vectors
-- Store vectors in a Python dict (in-memory, lost on restart)
-- On query: embed the question → compute cosine similarity → find nearest chunk → pass to GPT
-
-**Purpose:** understand the mechanics before using any framework.
+| Component | Technology |
+|---|---|
+| RAG framework | LlamaIndex |
+| Vector database | Qdrant (self-hosted) |
+| LLM | OpenAI gpt-4o-mini |
+| Embeddings | OpenAI text-embedding-3-small |
+| Infrastructure | Contabo VPS, Ubuntu 22.04, Docker |
 
 ---
 
-## P2 — LlamaIndex + Qdrant (`rag_llamaindex_qdrant.py`)
+## Scripts
 
-Same RAG pipeline, but on a production stack.
+### `rag_manual.py` — P1: RAG without frameworks
 
-### What changed vs P1
+Raw implementation using only OpenAI API directly.
+No LlamaIndex, no abstractions — shows what happens under the hood.
 
-| Problem in P1 | Solution in P2 |
-|---------------|----------------|
-| Vectors stored in dict — lost on restart | Qdrant vector store — persistent on disk |
-| Manual chunking | LlamaIndex handles chunking automatically |
-| Manual cosine similarity search | Qdrant handles similarity search |
-| Single hardcoded question | Interactive terminal loop |
-| 1 chunk as context for GPT | top-3 chunks (`similarity_top_k=3`) |
+- Manual chunking with overlap
+- Direct embedding API calls
+- Cosine similarity computed with numpy
+- In-memory vector store
 
-### Problems encountered and how they were solved
+**What you learn:** how embeddings work, what chunking is, why overlap matters.
 
-**Problem 1: All queries returned the same chunk**
-- Cause: `SimpleDirectoryReader` by default merges all PDF pages into a single `Document` object → LlamaIndex creates only 1 chunk → Qdrant has 1 vector → every query returns it
-- Fix: `file_extractor={".pdf": PDFReader()}` — forces page-by-page splitting. Each page = separate `Document` = separate chunks in Qdrant
+---
 
-**Problem 2: Re-indexing on every run (wastes API money)**
-- Cause: naive approach — delete collection and re-index every time the script runs
-- Fix: persistence check before indexing:
-  ```python
-  collections = [c.name for c in client.get_collections().collections]
-  if "p2_documents" in collections:
-      index = VectorStoreIndex.from_vector_store(vector_store)  # reuse
-  else:
-      index = VectorStoreIndex.from_documents(documents, ...)   # index once
-  ```
-- Result: first run indexes and stores vectors in Qdrant. All subsequent runs reuse existing vectors — instant startup, zero API cost
-- Known limitation: if you add a new file to `docs/`, the check won't detect it. Delete the collection manually in Qdrant Dashboard to force re-indexing. Fixed properly in P3 with per-file metadata tracking.
+### `rag_llamaindex_qdrant.py` — P2: LlamaIndex + Qdrant
 
-**Problem 3: venv broken after folder rename**
-- Cause: venv stores absolute paths internally. After renaming `rag-week1` → `rag-experiments`, `which python3` pointed to system Python despite venv being "active"
-- Fix: delete and recreate venv from scratch in the new location
+Production-grade pipeline using LlamaIndex and self-hosted Qdrant.
 
-### How it works
+- SimpleDirectoryReader for PDF ingestion
+- Qdrant as persistent vector store
+- Collection existence check (skip re-indexing if already done)
+- Interactive Q&A loop with source attribution
+
+**What you learn:** how LlamaIndex abstracts the RAG pipeline, how Qdrant stores vectors persistently.
+
+---
+
+### `rag_multidoc.py` — P3: Multi-document + Metadata Filtering
+
+Multiple documents with different types, smart incremental indexing.
+
+- SHA256 hash registry — only new/changed files get indexed
+- Explicit metadata per document (`doc_type`, `file_name`, `source`)
+- Metadata filtering at query time — search only within specific document types
+- `index.insert()` — adds documents without rebuilding the collection
+- Source attribution with cosine similarity scores
+
+**What you learn:** metadata filtering, incremental indexing, real-world document management.
+
+---
+
+## How Metadata Filtering Works
 
 ```
-Question (text)
-    ↓
-OpenAI Embeddings API → vector (1536 numbers)
-    ↓
-Qdrant similarity search → top-3 nearest chunks
-    ↓
-GPT-4o (chunks as context) → Answer
-    ↓
-source_nodes → show which chunks were used + similarity score
+Query: "What are the password requirements?"
+Filter: doc_type = 'policy'
+
+Qdrant flow:
+  1. Pre-filter: keep only vectors where doc_type == 'policy'
+  2. Vector search within filtered subset → top-3 by cosine similarity
+  3. Pass chunks to LLM as context
+
+Result: answer comes only from policy documents,
+        even if other documents are semantically closer.
 ```
 
-### Setup
+This is pre-filtering — Qdrant restricts the search space before vector comparison,
+not after. Faster and more precise than post-filtering.
+
+---
+
+## Cosine Similarity — Score Reference
+
+```
+score ≥ 0.6   → high relevance, document clearly contains the answer
+score 0.4–0.6 → moderate relevance
+score < 0.35  → low relevance, consider returning "not found" instead of hallucinating
+```
+
+---
+
+## Setup
 
 ```bash
+# Clone and enter
+git clone https://github.com/leobayker/rag-experiments.git
+cd rag-experiments
+
+# Create virtual environment
 python3 -m venv venv
 source venv/bin/activate
+
+# Install dependencies
 pip install llama-index llama-index-vector-stores-qdrant \
-            llama-index-embeddings-openai llama-index-readers-file \
-            qdrant-client python-dotenv
+            llama-index-embeddings-openai llama-index-llms-openai \
+            qdrant-client python-dotenv openai
+
+# Set OpenAI API key
+echo "OPENAI_API_KEY=your-key-here" > .env
+
+# Run Qdrant (Docker)
+docker run -d -p 6333:6333 qdrant/qdrant
+
+# Place documents in docs/ folder, then run
+python rag_multidoc.py
 ```
-
-Requires Qdrant running locally:
-```bash
-docker run -p 6333:6333 qdrant/qdrant
-```
-
-Create `.env` file:
-```
-OPENAI_API_KEY=sk-...
-```
-
-Place documents in `docs/` folder, then run:
-```bash
-python3 rag_llamaindex_qdrant.py
-```
-
-### Score interpretation
-
-| Score | Meaning |
-|-------|---------|
-| 0.7+ | Good match — chunk is relevant to the question |
-| 0.5–0.7 | Acceptable — some relevance |
-| below 0.4 | Poor match — wrong chunk retrieved |
-
-Low scores usually mean: question phrasing doesn't match document content, or chunking strategy needs adjustment.
 
 ---
 
-## Infrastructure
+## Document Type Detection
 
-- **VPS:** Ubuntu 22.04, 4 vCPU / 8GB RAM
-- **Qdrant:** self-hosted in Docker
-- **LLM:** OpenAI GPT-4o (cloud)
-- **Embeddings:** `text-embedding-3-small` (~5x cheaper than ada-002, equal quality for RAG)
+`rag_multidoc.py` determines `doc_type` from the filename:
+
+| Keyword in filename | doc_type |
+|---|---|
+| `policy` | policy |
+| `procedure` | procedure |
+| `report`, `test` | report |
+| `contract` | contract |
+| anything else | general |
+
+For production: use folder structure, a CSV manifest, or LLM-based classification.
 
 ---
 
 ## Roadmap
 
-- [x] P1 — Manual RAG (no frameworks)
-- [x] P2 — LlamaIndex + Qdrant
-- [ ] P3 — Multi-document + metadata filtering
-- [ ] P4 — Streamlit UI
-- [ ] P5-P6 — ReAct Agent
-- [ ] P7 — Agent memory
-- [ ] P8 — FastAPI production endpoint
-- [ ] P9 — On-premise RAG with Ollama (no internet required)
+| Script | Stage | Status |
+|---|---|---|
+| `rag_manual.py` | P1 — Raw RAG | ✅ Done |
+| `rag_llamaindex_qdrant.py` | P2 — LlamaIndex + Qdrant | ✅ Done |
+| `rag_multidoc.py` | P3 — Multi-doc + Metadata | ✅ Done |
+| `rag_multidoc_streamlit.py` | P4 — Streamlit UI | ⬜ Planned |
+| `agent_react.py` | P5–P6 — ReAct Agent | ⬜ Planned |
+| `agent_memory.py` | P7 — Agent with Memory | ⬜ Planned |
+| FastAPI endpoint | P8 — Production API | ⬜ Planned |
+| On-premise (Ollama) | P9 — No cloud dependencies | ⬜ Planned |
+
+---
+
+## Author
+
+Network & Cybersecurity Engineer transitioning into RAG and AI Agents.
+Building toward on-premise AI solutions for enterprise clients.
+
+[LinkedIn](https://linkedin.com/in/artem-hrechnyi) · [Upwork](https://upwork.com/freelancers/leobayker)
