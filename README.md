@@ -22,6 +22,7 @@ Built on LlamaIndex + Qdrant + OpenAI, self-hosted on VPS.
 | P2 | LlamaIndex + Qdrant | ✅ Done | vector store, persistence, query engine |
 | P3 | Multi-doc + metadata filtering | ✅ Done | metadata, pre-filtering, hash registry |
 | P4 | Streamlit UI + 2FA | ✅ Done | web UI, TOTP auth, nginx subpath proxy |
+| P4.1 | Ukrainian language tuning | ✅ Done | HyDE, morphological snippet extraction |
 | P5–P6 | ReAct Agent | ⬜ | tools, reasoning loop, action-observation |
 | P7 | Agent memory | ⬜ | short/long-term memory, context |
 | P8 | FastAPI production | ⬜ | REST API, async, Swagger |
@@ -76,6 +77,7 @@ Production-ready multi-document RAG with metadata pre-filtering.
 - Pre-filtering: narrows Qdrant search space BEFORE vector comparison
 - Hash registry (`doc_registry.json`): tracks SHA256 of each file, re-indexes only new/changed files
 - Supports incremental indexing with `index.insert()`
+- `SentenceSplitter(chunk_size=512, chunk_overlap=50)` — set via `Settings.text_splitter` for consistent chunking across all documents
 
 **Key concepts learned:**
 - Metadata stored alongside vectors in Qdrant payload
@@ -93,7 +95,7 @@ Web interface for the RAG pipeline with two-factor authentication.
 **What it does:**
 - Login form: password + TOTP code (Google Authenticator compatible)
 - After auth: full RAG UI with document type filter, question input, answer display
-- Sources panel: shows filename, doc_type, similarity score, text preview for each retrieved chunk
+- Sources panel: shows filename, doc_type, similarity score, relevant text snippet for each retrieved chunk
 - Sidebar: collection info, embedding model, LLM info, logout button
 - Session-based auth: re-login required when browser tab is closed
 
@@ -126,6 +128,114 @@ Main RAG UI shown
 **Tech:**
 - `pyotp` — TOTP generation and verification
 - `qrcode[pil]` — QR code generation for authenticator app setup
+
+---
+
+## P4.1 — Ukrainian Language Tuning (`streamlit_app.py`)
+
+Targeted improvements for RAG quality on Ukrainian legal documents.
+
+### Problem
+
+`text-embedding-3-small` is optimized primarily for English. When querying Ukrainian
+legal documents, cosine similarity scores between questions and relevant chunks were
+near-zero (0.01–0.02), causing the retriever to return irrelevant chunks. GPT then
+generated answers from its own training data instead of the documents — hallucinations.
+
+**Root cause:** the semantic gap between a question and its answer is large in any
+language, but especially pronounced in Ukrainian morphological forms with OpenAI
+embeddings. "підпорядковується" (question) vs "підпорядкованим" (document) —
+different vector representations despite identical meaning.
+
+### Solution 1 — HyDE (Hypothetical Document Embeddings)
+
+Instead of embedding the raw question, we first ask GPT to generate a hypothetical
+answer, then embed that answer for retrieval.
+
+```
+WITHOUT HyDE:
+question → embedding → Qdrant search → chunks → GPT → answer
+score: 0.01 (question ≠ document text semantically)
+
+WITH HyDE:
+question → GPT generates hypothetical answer → embedding → Qdrant search → chunks → GPT → answer
+score: 0.55–0.70 (answer ≈ document text semantically)
+```
+
+**Implementation** (manual HyDE, not via `TransformQueryEngine`):
+```python
+# Step 1: generate hypothetical answer in Ukrainian
+hyde_prompt = f"Напиши коротку відповідь українською мовою на питання: {question}"
+hypothetical = str(llm.complete(hyde_prompt))
+
+# Step 2: use hypothetical answer as search query
+response = query_engine.query(hypothetical)
+```
+
+Why manual instead of `TransformQueryEngine`:
+`TransformQueryEngine` wraps the entire pipeline and loses `source_nodes` accuracy —
+the scores returned do not correspond to actual Qdrant retrieval scores.
+Manual HyDE keeps retrieval and generation separate, preserving correct source attribution.
+
+**Cost:** one extra GPT API call per query (hypothetical generation). Negligible on `gpt-4o-mini`.
+
+### Solution 2 — Chunking optimization
+
+Reduced `chunk_size` from default 1024 to **512 tokens** with `chunk_overlap=50`.
+
+Ukrainian legal documents have dense, self-contained articles and clauses.
+Smaller chunks = one article per chunk = more precise retrieval.
+Overlap ensures sentences at chunk boundaries retain context from the previous chunk.
+
+### Solution 3 — Morphological snippet extraction (`extract_relevant_snippet`)
+
+Ukrainian is a highly inflected language. The same word root appears in many forms:
+- "підпорядковується", "підпорядкованим", "підпорядкування" — all the same root
+
+Standard keyword matching fails because question words rarely match document words exactly.
+
+**Solution:** use first 6 characters of each word as a pseudo-stem:
+```python
+keywords = [w.lower()[:6] for w in question.split() if len(w) > 4]
+# "підпорядковується"[:6] = "підпор"
+# "підпорядкованим"[:6]   = "підпор"  ← match!
+```
+
+The function then:
+1. Splits chunk text into sentences
+2. Scores each sentence by keyword root matches
+3. Returns the highest-scoring sentence + 2 sentences of surrounding context
+
+This ensures the Sources panel shows the **relevant fragment** of each chunk,
+not just the beginning of the chunk text.
+
+### System prompt for Ukrainian output
+
+```python
+Settings.llm = OpenAI(
+    model="gpt-4o-mini",
+    temperature=0,
+    system_prompt="Ти асистент який відповідає ВИКЛЮЧНО українською мовою. Використовуй лише інформацію з наданого контексту."
+)
+```
+
+Forces GPT to respond in Ukrainian regardless of the language of the hypothetical
+query used internally by HyDE.
+
+### Results after tuning
+
+| Metric | Before | After |
+|---|---|---|
+| Similarity scores | 0.01–0.02 | 0.55–0.70 |
+| Source relevance | Wrong documents | Correct documents |
+| Answer language | English (GPT default) | Ukrainian |
+| Hallucinations | High (no relevant chunks found) | Low (correct chunks retrieved) |
+
+### Key lesson
+
+`text-embedding-3-small` works well for Ukrainian with HyDE — no need to switch to
+a multilingual model for cloud deployments. For fully on-premise (P9), `bge-m3` via
+Ollama will replace OpenAI embeddings entirely.
 
 ---
 

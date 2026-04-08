@@ -14,6 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, StorageContext
+from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.vector_stores.types import MetadataFilter, MetadataFilters, FilterOperator
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from llama_index.embeddings.openai import OpenAIEmbedding
@@ -116,6 +117,7 @@ def get_doc_metadata(filepath: str) -> dict:
 def init_settings():
     Settings.llm = OpenAI(model="gpt-4o-mini", temperature=0)
     Settings.embed_model = OpenAIEmbedding(model="text-embedding-3-small")
+    Settings.text_splitter = SentenceSplitter(chunk_size=512, chunk_overlap=50)
 
 
 # ─────────────────────────────────────────────
