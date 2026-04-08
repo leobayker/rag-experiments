@@ -33,3 +33,8 @@ qdrant_storage/
 # OS
 .DS_Store
 Thumbs.db
+
+#otp
+totp_qr.png
+
+totp_qr.png

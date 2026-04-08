@@ -1,159 +1,187 @@
 # rag-experiments
 
-Hands-on RAG (Retrieval-Augmented Generation) implementation series.
-Built on a self-hosted VPS using LlamaIndex, Qdrant, and OpenAI API.
-
-Each script represents one learning stage — from raw API calls to production-ready agents.
-
----
+Practical RAG (Retrieval-Augmented Generation) and AI Agents learning path.
+Built on LlamaIndex + Qdrant + OpenAI, self-hosted on VPS.
 
 ## Stack
 
-| Component | Technology |
-|---|---|
-| RAG framework | LlamaIndex |
-| Vector database | Qdrant (self-hosted) |
-| LLM | OpenAI gpt-4o-mini |
-| Embeddings | OpenAI text-embedding-3-small |
-| Infrastructure | Contabo VPS, Ubuntu 22.04, Docker |
+- **LlamaIndex** — RAG pipeline
+- **Qdrant** — vector database (self-hosted)
+- **OpenAI API** — embeddings (`text-embedding-3-small`) + LLM (`gpt-4o-mini`)
+- **Streamlit** — web UI
+- **FastAPI** — production API (P8)
+- **Ollama** — local models for on-premise (P9)
 
 ---
 
-## Scripts
+## Learning Path
 
-### `rag_manual.py` — P1: RAG without frameworks
-
-Raw implementation using only OpenAI API directly.
-No LlamaIndex, no abstractions — shows what happens under the hood.
-
-- Manual chunking with overlap
-- Direct embedding API calls
-- Cosine similarity computed with numpy
-- In-memory vector store
-
-**What you learn:** how embeddings work, what chunking is, why overlap matters.
-
----
-
-### `rag_llamaindex_qdrant.py` — P2: LlamaIndex + Qdrant
-
-Production-grade pipeline using LlamaIndex and self-hosted Qdrant.
-
-- SimpleDirectoryReader for PDF ingestion
-- Qdrant as persistent vector store
-- Collection existence check (skip re-indexing if already done)
-- Interactive Q&A loop with source attribution
-
-**What you learn:** how LlamaIndex abstracts the RAG pipeline, how Qdrant stores vectors persistently.
+| # | Project | Status | Key concepts |
+|---|---|---|---|
+| P1 | Manual RAG pipeline | ✅ Done | embeddings, cosine similarity, chunking |
+| P2 | LlamaIndex + Qdrant | ✅ Done | vector store, persistence, query engine |
+| P3 | Multi-doc + metadata filtering | ✅ Done | metadata, pre-filtering, hash registry |
+| P4 | Streamlit UI + 2FA | ✅ Done | web UI, TOTP auth, nginx subpath proxy |
+| P5–P6 | ReAct Agent | ⬜ | tools, reasoning loop, action-observation |
+| P7 | Agent memory | ⬜ | short/long-term memory, context |
+| P8 | FastAPI production | ⬜ | REST API, async, Swagger |
+| P9 | On-premise RAG | ⬜ | Ollama, bge-m3, no internet required |
 
 ---
 
-### `rag_multidoc.py` — P3: Multi-document + Metadata Filtering
+## P1 — Manual RAG (`rag_manual.py`)
 
-Multiple documents with different types, smart incremental indexing.
+RAG pipeline built from scratch without frameworks.
 
-- SHA256 hash registry — only new/changed files get indexed
-- Explicit metadata per document (`doc_type`, `file_name`, `source`)
-- Metadata filtering at query time — search only within specific document types
-- `index.insert()` — adds documents without rebuilding the collection
-- Source attribution with cosine similarity scores
+**What it does:**
+- Loads a text document and splits it into chunks
+- Generates embeddings via OpenAI API
+- Stores vectors in memory (dict)
+- On query: embeds the question, finds top-k similar chunks via cosine similarity
+- Passes context + question to GPT for answer generation
 
-**What you learn:** metadata filtering, incremental indexing, real-world document management.
+**Key concepts learned:**
+- What embeddings are (1536-dimensional vectors representing semantic meaning)
+- Cosine similarity: 0.6+ relevant, below 0.35 unrelated
+- Why chunking matters — chunk size directly affects answer quality
+- The full RAG loop: index → retrieve → augment → generate
 
 ---
 
-## How Metadata Filtering Works
+## P2 — LlamaIndex + Qdrant (`rag_llamaindex_qdrant.py`)
 
+Same pipeline, now using production-grade tools.
+
+**What it does:**
+- Loads PDF via `SimpleDirectoryReader` with explicit `PDFReader`
+- Chunks with `SentenceSplitter` (chunk_size=512, overlap=50)
+- Stores vectors in Qdrant (self-hosted, persisted to disk)
+- Checks if collection exists before indexing — saves API costs on re-runs
+- Queries via `VectorStoreIndex.as_query_engine()`
+
+**Key concepts learned:**
+- Why `file_extractor={".pdf": PDFReader()}` is required (SimpleDirectoryReader merges PDF pages by default)
+- Qdrant persistence — vectors survive process restart
+- Collection existence check pattern
+
+---
+
+## P3 — Multi-doc + Metadata Filtering (`rag_multidoc.py`)
+
+Production-ready multi-document RAG with metadata pre-filtering.
+
+**What it does:**
+- Indexes multiple documents from `docs/` directory
+- Assigns metadata per document: `doc_type`, `source`, `filename`
+- Pre-filtering: narrows Qdrant search space BEFORE vector comparison
+- Hash registry (`doc_registry.json`): tracks SHA256 of each file, re-indexes only new/changed files
+- Supports incremental indexing with `index.insert()`
+
+**Key concepts learned:**
+- Metadata stored alongside vectors in Qdrant payload
+- Pre-filtering vs post-filtering (pre is faster and more accurate)
+- Incremental indexing without full collection rebuild
+- Hash-based change detection for large document sets
+- Metadata key in Qdrant: `file_name` (not `filename`) — always verify with payload inspection
+
+---
+
+## P4 — Streamlit UI + 2FA (`streamlit_app.py`)
+
+Web interface for the RAG pipeline with two-factor authentication.
+
+**What it does:**
+- Login form: password + TOTP code (Google Authenticator compatible)
+- After auth: full RAG UI with document type filter, question input, answer display
+- Sources panel: shows filename, doc_type, similarity score, text preview for each retrieved chunk
+- Sidebar: collection info, embedding model, LLM info, logout button
+- Session-based auth: re-login required when browser tab is closed
+
+**Authentication flow:**
 ```
-Query: "What are the password requirements?"
-Filter: doc_type = 'policy'
-
-Qdrant flow:
-  1. Pre-filter: keep only vectors where doc_type == 'policy'
-  2. Vector search within filtered subset → top-3 by cosine similarity
-  3. Pass chunks to LLM as context
-
-Result: answer comes only from policy documents,
-        even if other documents are semantically closer.
+User enters password + 6-digit TOTP code
+        ↓
+server verifies password (env var RAG_PASSWORD)
+        ↓
+pyotp.TOTP.verify() checks code with valid_window=1 (±30 sec drift tolerance)
+        ↓
+st.session_state["authenticated"] = True
+        ↓
+Main RAG UI shown
 ```
 
-This is pre-filtering — Qdrant restricts the search space before vector comparison,
-not after. Faster and more precise than post-filtering.
+**Deployment:**
+- Runs as systemd service (`streamlit-rag.service`)
+- Accessible via `https://leobayker.duckdns.org/rag/`
+- nginx reverse proxy with `^~` location prefix match
+- `--server.baseUrlPath /rag` + `proxy_pass` without trailing slash = correct path handling
 
----
+**Key concepts learned:**
+- Streamlit re-runs entire script on every interaction → `@st.cache_resource` is critical
+- WebSocket (`/_stcore/stream`) requires separate nginx location block
+- `proxy_pass host:port` (no slash) vs `proxy_pass host:port/` (with slash) — different path handling
+- TOTP: `valid_window=1` compensates for clock drift between server and phone
+- `st.form()` prevents script re-run on every keystroke
 
-## Cosine Similarity — Score Reference
-
-```
-score ≥ 0.6   → high relevance, document clearly contains the answer
-score 0.4–0.6 → moderate relevance
-score < 0.35  → low relevance, consider returning "not found" instead of hallucinating
-```
+**Tech:**
+- `pyotp` — TOTP generation and verification
+- `qrcode[pil]` — QR code generation for authenticator app setup
 
 ---
 
 ## Setup
 
 ```bash
-# Clone and enter
+# Clone and create venv
 git clone https://github.com/leobayker/rag-experiments.git
 cd rag-experiments
-
-# Create virtual environment
 python3 -m venv venv
 source venv/bin/activate
 
 # Install dependencies
 pip install llama-index llama-index-vector-stores-qdrant \
-            llama-index-embeddings-openai llama-index-llms-openai \
-            qdrant-client python-dotenv openai
+            llama-index-embeddings-openai qdrant-client \
+            python-dotenv streamlit pyotp qrcode[pil]
 
-# Set OpenAI API key
-echo "OPENAI_API_KEY=your-key-here" > .env
+# Configure
+cp .env.example .env
+# Edit .env: add OPENAI_API_KEY, RAG_PASSWORD, RAG_TOTP_SECRET
 
 # Run Qdrant (Docker)
 docker run -d -p 6333:6333 qdrant/qdrant
 
-# Place documents in docs/ folder, then run
+# Index documents
 python rag_multidoc.py
+
+# Run UI
+streamlit run streamlit_app.py
 ```
 
 ---
 
-## Document Type Detection
+## Environment Variables (`.env`)
 
-`rag_multidoc.py` determines `doc_type` from the filename:
+```
+OPENAI_API_KEY=sk-...
+RAG_PASSWORD=your_password
+RAG_TOTP_SECRET=your_base32_totp_secret
+```
 
-| Keyword in filename | doc_type |
-|---|---|
-| `policy` | policy |
-| `procedure` | procedure |
-| `report`, `test` | report |
-| `contract` | contract |
-| anything else | general |
-
-For production: use folder structure, a CSV manifest, or LLM-based classification.
-
----
-
-## Roadmap
-
-| Script | Stage | Status |
-|---|---|---|
-| `rag_manual.py` | P1 — Raw RAG | ✅ Done |
-| `rag_llamaindex_qdrant.py` | P2 — LlamaIndex + Qdrant | ✅ Done |
-| `rag_multidoc.py` | P3 — Multi-doc + Metadata | ✅ Done |
-| `rag_multidoc_streamlit.py` | P4 — Streamlit UI | ⬜ Planned |
-| `agent_react.py` | P5–P6 — ReAct Agent | ⬜ Planned |
-| `agent_memory.py` | P7 — Agent with Memory | ⬜ Planned |
-| FastAPI endpoint | P8 — Production API | ⬜ Planned |
-| On-premise (Ollama) | P9 — No cloud dependencies | ⬜ Planned |
+Generate TOTP secret:
+```bash
+python3 -c "import pyotp; print(pyotp.random_base32())"
+```
 
 ---
 
-## Author
+## .gitignore
 
-Network & Cybersecurity Engineer transitioning into RAG and AI Agents.
-Building toward on-premise AI solutions for enterprise clients.
-
-[LinkedIn](https://linkedin.com/in/artem-hrechnyi) · [Upwork](https://upwork.com/freelancers/leobayker)
+```
+.env
+*.pdf
+qdrant_storage/
+doc_registry.json
+totp_qr.png
+__pycache__/
+venv/
+```
