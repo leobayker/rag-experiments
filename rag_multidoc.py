@@ -29,6 +29,14 @@ load_dotenv()
 # ─────────────────────────────────────────────
 
 DOCS_DIR = "/opt/rag-experiments/docs"
+
+# Відповідність назви папки → doc_type
+FOLDER_TYPE_MAP = {
+    "laws": "law",
+    "orders": "order",
+    "decrees": "decree",
+    "general": "general",
+}
 REGISTRY_PATH = "/opt/rag-experiments/doc_registry.json"  # hash registry stored here
 COLLECTION_NAME = "p3_multidoc"                            # separate collection from P2
 QDRANT_HOST = "localhost"
@@ -86,18 +94,10 @@ def save_registry(registry: dict):
 # ─────────────────────────────────────────────
 
 def get_doc_metadata(filepath: str) -> dict:
-    filename = Path(filepath).name.lower()
-
-    if "policy" in filename:
-        doc_type = "policy"
-    elif "procedure" in filename:
-        doc_type = "procedure"
-    elif "report" in filename or "test" in filename:
-        doc_type = "report"
-    elif "contract" in filename:
-        doc_type = "contract"
-    else:
-        doc_type = "general"
+    # Визначаємо тип по назві папки в якій лежить файл
+    # Path(filepath).parent.name — назва безпосередньої батьківської папки
+    folder = Path(filepath).parent.name
+    doc_type = FOLDER_TYPE_MAP.get(folder, "general")
 
     return {
         "file_name": Path(filepath).name,
@@ -174,7 +174,7 @@ def get_index() -> VectorStoreIndex:
 def index_new_documents(index: VectorStoreIndex):
     registry = load_registry()
     docs_path = Path(DOCS_DIR)
-    all_files = list(docs_path.glob("*.pdf")) + list(docs_path.glob("*.txt"))
+    all_files = list(docs_path.rglob("*.pdf")) + list(docs_path.rglob("*.txt"))
 
     new_files = []
     for filepath in all_files:
